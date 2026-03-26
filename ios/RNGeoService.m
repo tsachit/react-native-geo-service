@@ -248,7 +248,24 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
 
 - (void)locationManager:(CLLocationManager *)manager
        didFailWithError:(NSError *)error {
-    RCTLogError(@"[RNGeoService] Location error: %@", error.localizedDescription);
+    // kCLErrorLocationUnknown (code 0) is transient — CoreLocation couldn't get a
+    // fix yet but will keep trying automatically. Silently ignore it so we don't
+    // surface a noisy error to the app before the GPS has warmed up.
+    if ([error.domain isEqualToString:kCLErrorDomain] && error.code == kCLErrorLocationUnknown) {
+        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Location unknown (transient) — waiting for GPS fix");
+        return;
+    }
+
+    // kCLErrorDenied means the user revoked location permission — this is a real
+    // error worth surfacing, and we should stop tracking to avoid repeated failures.
+    if ([error.domain isEqualToString:kCLErrorDomain] && error.code == kCLErrorDenied) {
+        RCTLogWarn(@"[RNGeoService] Location permission denied — stopping tracking");
+        [self.locationManager stopUpdatingLocation];
+        [self.locationManager stopMonitoringSignificantLocationChanges];
+    } else {
+        RCTLogError(@"[RNGeoService] Location error: %@", error.localizedDescription);
+    }
+
     if (self.hasListeners) {
         [self sendEventWithName:@"onError" body:@{
             @"code":    @(error.code),
