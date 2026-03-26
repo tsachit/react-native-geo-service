@@ -149,3 +149,11 @@ export interface LocationError {
 
 export type LocationCallback = (location: Location) => void;
 export type ErrorCallback = (error: LocationError) => void;
+
+/**
+ * Returned by onLocation() and onError().
+ * Call .remove() to stop receiving updates and clean up the listener.
+ */
+export interface GeoSubscription {
+  remove(): void;
+}

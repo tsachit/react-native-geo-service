@@ -1,12 +1,12 @@
 import {
   NativeModules,
   NativeEventEmitter,
-  EmitterSubscription,
   Platform,
   AppRegistry,
 } from 'react-native';
 import {
   GeoServiceConfig,
+  GeoSubscription,
   Location,
   LocationCallback,
   ErrorCallback,
@@ -88,7 +88,7 @@ async function isTracking(): Promise<boolean> {
 
 /**
  * Subscribe to location updates.
- * Returns an EmitterSubscription — call .remove() to unsubscribe.
+ * Returns a GeoSubscription — call .remove() to unsubscribe.
  *
  * @example
  * const sub = RNGeoService.onLocation((location) => {
@@ -97,14 +97,14 @@ async function isTracking(): Promise<boolean> {
  * // Later:
  * sub.remove();
  */
-function onLocation(callback: LocationCallback): EmitterSubscription {
+function onLocation(callback: LocationCallback): GeoSubscription {
   return eventEmitter.addListener('onLocation', callback);
 }
 
 /**
  * Subscribe to location errors.
  */
-function onError(callback: ErrorCallback): EmitterSubscription {
+function onError(callback: ErrorCallback): GeoSubscription {
   return eventEmitter.addListener('onError', callback);
 }
 
