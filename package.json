@@ -1,6 +1,6 @@
 {
   "name": "@tsachit/react-native-geo-service",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Battery-efficient background geolocation for React Native with headless support",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
