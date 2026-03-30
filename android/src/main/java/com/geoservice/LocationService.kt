@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.android.gms.location.*
 import org.json.JSONObject
@@ -44,8 +45,20 @@ class LocationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val bundle = intent?.getBundleExtra("config")
-        config = GeoServiceConfig.fromBundle(bundle)
+        config = if (intent != null) {
+            GeoServiceConfig.fromBundle(intent.getBundleExtra("config"))
+        } else {
+            // START_STICKY restart after force-kill: intent is null, restore from SharedPreferences
+            Log.d(TAG, "START_STICKY restart detected — restoring config from SharedPreferences")
+            configFromSharedPreferences()
+        }
+
+        // Stop immediately if location permission was revoked while we were away
+        if (!hasLocationPermission()) {
+            Log.e(TAG, "Location permission not granted — stopping service")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         slowReadingCount = 0
         isIdle = false
@@ -56,6 +69,63 @@ class LocationService : Service() {
         isRunning = true
 
         return START_STICKY
+    }
+
+    // Called when the user swipes the app away from the recents screen.
+    // By default the foreground service keeps running — which is correct for
+    // always-on tracking. If stopOnAppClose=true we honour the user's intent.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val prefs = getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        val shouldStop = try {
+            val json = prefs.getString("configBundle", null)
+            json?.let { org.json.JSONObject(it).optBoolean("stopOnAppClose", false) } ?: false
+        } catch (e: Exception) { false }
+
+        if (shouldStop) {
+            log("App removed from recents — stopOnAppClose=true, stopping service")
+            prefs.edit().putBoolean(BootReceiver.KEY_IS_TRACKING, false).apply()
+            stopSelf()
+        } else {
+            log("App removed from recents — continuing background tracking")
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        val fine = ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return fine || coarse
+    }
+
+    private fun configFromSharedPreferences(): GeoServiceConfig {
+        val prefs = getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        val configJson = prefs.getString("configBundle", null) ?: return GeoServiceConfig()
+        return try {
+            val json = org.json.JSONObject(configJson)
+            val bundle = android.os.Bundle().apply {
+                putFloat("minDistanceMeters", json.optDouble("minDistanceMeters", 10.0).toFloat())
+                putString("accuracy", json.optString("accuracy", "balanced"))
+                putBoolean("stopOnAppClose", json.optBoolean("stopOnAppClose", false))
+                putBoolean("restartOnBoot", json.optBoolean("restartOnBoot", false))
+                putLong("updateIntervalMs", json.optLong("updateIntervalMs", 5000L))
+                putLong("minUpdateIntervalMs", json.optLong("minUpdateIntervalMs", 2000L))
+                putString("serviceTitle", json.optString("serviceTitle", "Location Tracking"))
+                putString("serviceBody", json.optString("serviceBody", "Your location is being tracked in the background."))
+                putString("backgroundTaskName", json.optString("backgroundTaskName", "GeoServiceHeadlessTask"))
+                putBoolean("adaptiveAccuracy", json.optBoolean("adaptiveAccuracy", true))
+                putFloat("idleSpeedThreshold", json.optDouble("idleSpeedThreshold", 0.5).toFloat())
+                putInt("idleSampleCount", json.optInt("idleSampleCount", 3))
+                putBoolean("debug", json.optBoolean("debug", false))
+            }
+            GeoServiceConfig.fromBundle(bundle)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore config from SharedPreferences: ${e.message}")
+            GeoServiceConfig()
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -195,11 +265,12 @@ class LocationService : Service() {
             putExtra("location", locationJson)
             putExtra("taskName", config.backgroundTaskName)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        // Always use startService — HeadlessJsTaskService does NOT call startForeground().
+        // Using startForegroundService() here would crash with
+        // ForegroundServiceDidNotStartInTimeException after 5 seconds on Android O+.
+        // This is safe because LocationService itself is a foreground service, which
+        // allows it to start background services regardless of app state.
+        startService(intent)
     }
 
     // ---------------------------------------------------------------------------

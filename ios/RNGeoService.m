@@ -33,6 +33,9 @@ static CLLocationAccuracy accuracyFromString(NSString *accuracy) {
 @property (nonatomic, strong) CLLocationManager *locationManager;
 @property (nonatomic, strong) NSDictionary *config;
 
+// Locations buffered while JS listeners are not yet attached (background relaunch)
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *pendingLocations;
+
 @property (nonatomic, assign) BOOL isTracking;
 @property (nonatomic, assign) BOOL hasListeners;
 @property (nonatomic, assign) BOOL coarseTracking;
@@ -60,14 +63,80 @@ RCT_EXPORT_MODULE();
 }
 
 // ---------------------------------------------------------------------------
+// Init — auto-resume tracking if app was relaunched from terminated state
+//
+// iOS can relaunch a terminated app when startMonitoringSignificantLocationChanges
+// is active. When this happens, React Native creates a fresh module instance.
+// We detect this via NSUserDefaults and immediately resume tracking so that
+// location updates are not lost during the relaunch window.
+// ---------------------------------------------------------------------------
+- (instancetype)init {
+    if (self = [super init]) {
+        self.pendingLocations = [NSMutableArray array];
+
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        BOOL wasTracking = [defaults boolForKey:@"GeoServiceIsTracking"];
+
+        if (wasTracking) {
+            // Restore persisted config
+            NSData *configData = [defaults objectForKey:@"GeoServiceConfig"];
+            if (configData) {
+                NSDictionary *restoredConfig = [NSPropertyListSerialization
+                    propertyListWithData:configData options:0 format:nil error:nil];
+                if (restoredConfig) {
+                    self.config             = restoredConfig;
+                    self.coarseTracking     = [restoredConfig[@"coarseTracking"] boolValue];
+                    self.debugMode          = [restoredConfig[@"debug"] boolValue];
+                    self.adaptiveAccuracy   = restoredConfig[@"adaptiveAccuracy"]
+                        ? [restoredConfig[@"adaptiveAccuracy"] boolValue] : YES;
+                    self.idleSpeedThreshold = restoredConfig[@"idleSpeedThreshold"]
+                        ? [restoredConfig[@"idleSpeedThreshold"] floatValue] : 0.5f;
+                    self.idleSampleCount    = restoredConfig[@"idleSampleCount"]
+                        ? [restoredConfig[@"idleSampleCount"] integerValue] : 3;
+                }
+            }
+
+            [self applyConfigToLocationManager];
+
+            // Significant changes is always running alongside standard updates —
+            // it is the only mechanism that can wake a terminated app and costs
+            // almost nothing in battery (cell towers, not GPS).
+            [self.locationManager startMonitoringSignificantLocationChanges];
+            if (!self.coarseTracking) {
+                [self.locationManager startUpdatingLocation];
+            }
+            self.isTracking = YES;
+            if (self.debugMode) RCTLogInfo(@"[RNGeoService] Auto-resumed tracking after app relaunch");
+        }
+    }
+    return self;
+}
+
+// ---------------------------------------------------------------------------
 // Supported events
 // ---------------------------------------------------------------------------
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onLocation", @"onError"];
 }
 
-- (void)startObserving { self.hasListeners = YES; }
-- (void)stopObserving  { self.hasListeners = NO;  }
+// Drain any locations that arrived before JS listeners were attached.
+// This is the normal case during a background relaunch from terminated state:
+// CLLocationManager fires before the React component tree has mounted.
+- (void)startObserving {
+    self.hasListeners = YES;
+    if (self.pendingLocations.count > 0) {
+        if (self.debugMode) {
+            RCTLogInfo(@"[RNGeoService] Draining %lu buffered location(s) to JS",
+                       (unsigned long)self.pendingLocations.count);
+        }
+        for (NSDictionary *loc in self.pendingLocations) {
+            [self sendEventWithName:@"onLocation" body:loc];
+        }
+        [self.pendingLocations removeAllObjects];
+    }
+}
+
+- (void)stopObserving { self.hasListeners = NO; }
 
 // ---------------------------------------------------------------------------
 // Lazy CLLocationManager
@@ -86,7 +155,7 @@ RCT_EXPORT_MODULE();
 RCT_EXPORT_METHOD(configure:(NSDictionary *)options
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
-    self.config = options;
+    self.config           = options;
     self.coarseTracking   = [options[@"coarseTracking"] boolValue];
     self.debugMode        = [options[@"debug"] boolValue];
     self.adaptiveAccuracy = options[@"adaptiveAccuracy"] ? [options[@"adaptiveAccuracy"] boolValue] : YES;
@@ -94,6 +163,19 @@ RCT_EXPORT_METHOD(configure:(NSDictionary *)options
     self.idleSampleCount  = options[@"idleSampleCount"] ? [options[@"idleSampleCount"] integerValue] : 3;
     self.slowReadingCount = 0;
     self.isIdle           = NO;
+
+    // Persist config so it survives app termination and can be restored on
+    // background relaunch triggered by significant location changes.
+    NSError *serializeError = nil;
+    NSData *configData = [NSPropertyListSerialization
+        dataWithPropertyList:options
+        format:NSPropertyListBinaryFormat_v1_0
+        options:0
+        error:&serializeError];
+    if (configData && !serializeError) {
+        [[NSUserDefaults standardUserDefaults] setObject:configData forKey:@"GeoServiceConfig"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
 
     [self applyConfigToLocationManager];
 
@@ -133,7 +215,8 @@ RCT_EXPORT_METHOD(start:(RCTPromiseResolveBlock)resolve
 
     if (status == kCLAuthorizationStatusDenied ||
         status == kCLAuthorizationStatusRestricted) {
-        reject(@"PERMISSION_DENIED", @"Location permission denied. Request 'Always' permission before calling start().", nil);
+        reject(@"PERMISSION_DENIED",
+               @"Location permission denied. Request 'Always' permission before calling start().", nil);
         return;
     }
 
@@ -143,12 +226,16 @@ RCT_EXPORT_METHOD(start:(RCTPromiseResolveBlock)resolve
 
     [self applyConfigToLocationManager];
 
+    // Significant changes MUST always run alongside standard updates.
+    // It is the only iOS mechanism that can relaunch a terminated app —
+    // and it uses cell towers (not GPS), so battery cost is negligible.
+    [self.locationManager startMonitoringSignificantLocationChanges];
+
     if (self.coarseTracking) {
-        [self.locationManager startMonitoringSignificantLocationChanges];
-        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Coarse (significant-change) tracking started");
+        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Coarse (significant-change only) tracking started");
     } else {
         [self.locationManager startUpdatingLocation];
-        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Standard tracking started");
+        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Standard tracking started (+ significant changes for background wake)");
     }
 
     self.isTracking = YES;
@@ -163,14 +250,12 @@ RCT_EXPORT_METHOD(start:(RCTPromiseResolveBlock)resolve
 // ---------------------------------------------------------------------------
 RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
-    if (self.coarseTracking) {
-        [self.locationManager stopMonitoringSignificantLocationChanges];
-    } else {
-        [self.locationManager stopUpdatingLocation];
-    }
+    [self.locationManager stopUpdatingLocation];
+    [self.locationManager stopMonitoringSignificantLocationChanges];
 
     self.isTracking = NO;
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"GeoServiceIsTracking"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"GeoServiceConfig"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     if (self.debugMode) RCTLogInfo(@"[RNGeoService] Tracking stopped");
@@ -215,8 +300,18 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
         [self evaluateMotionState:location];
     }
 
+    NSDictionary *locationDict = [self locationToDictionary:location];
+
     if (self.hasListeners) {
-        [self sendEventWithName:@"onLocation" body:[self locationToDictionary:location]];
+        [self sendEventWithName:@"onLocation" body:locationDict];
+    } else {
+        // Buffer the location — JS listeners haven't attached yet.
+        // This is normal during background relaunch: CLLocationManager fires
+        // before the React component tree has had time to mount.
+        // Events are drained in startObserving() once a listener attaches.
+        if (self.pendingLocations.count < 10) {
+            [self.pendingLocations addObject:locationDict];
+        }
     }
 }
 
@@ -248,20 +343,21 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
 
 - (void)locationManager:(CLLocationManager *)manager
        didFailWithError:(NSError *)error {
-    // kCLErrorLocationUnknown (code 0) is transient — CoreLocation couldn't get a
-    // fix yet but will keep trying automatically. Silently ignore it so we don't
-    // surface a noisy error to the app before the GPS has warmed up.
+    // kCLErrorLocationUnknown (code 0) is transient — CoreLocation hasn't acquired
+    // a fix yet but will keep trying automatically. Silently ignore it.
     if ([error.domain isEqualToString:kCLErrorDomain] && error.code == kCLErrorLocationUnknown) {
         if (self.debugMode) RCTLogInfo(@"[RNGeoService] Location unknown (transient) — waiting for GPS fix");
         return;
     }
 
-    // kCLErrorDenied means the user revoked location permission — this is a real
-    // error worth surfacing, and we should stop tracking to avoid repeated failures.
+    // kCLErrorDenied: user revoked permission. Stop everything and clear state.
     if ([error.domain isEqualToString:kCLErrorDomain] && error.code == kCLErrorDenied) {
         RCTLogWarn(@"[RNGeoService] Location permission denied — stopping tracking");
         [self.locationManager stopUpdatingLocation];
         [self.locationManager stopMonitoringSignificantLocationChanges];
+        self.isTracking = NO;
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"GeoServiceIsTracking"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
     } else {
         RCTLogError(@"[RNGeoService] Location error: %@", error.localizedDescription);
     }
@@ -276,18 +372,38 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
 
 - (void)locationManager:(CLLocationManager *)manager
     didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
-    if (self.debugMode) RCTLogInfo(@"[RNGeoService] Auth status: %d", status);
+    if (self.debugMode) RCTLogInfo(@"[RNGeoService] Auth status changed: %d", status);
 
-    // Resume tracking after background relaunch (e.g. significant location change)
-    if (status == kCLAuthorizationStatusAuthorizedAlways &&
+    // Permission was revoked while tracking — stop and notify JS
+    if (status == kCLAuthorizationStatusDenied || status == kCLAuthorizationStatusRestricted) {
+        if (self.isTracking) {
+            [self.locationManager stopUpdatingLocation];
+            [self.locationManager stopMonitoringSignificantLocationChanges];
+            self.isTracking = NO;
+            [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"GeoServiceIsTracking"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            if (self.hasListeners) {
+                [self sendEventWithName:@"onError" body:@{
+                    @"code":    @(kCLErrorDenied),
+                    @"message": @"Location permission was revoked. Please re-enable in Settings."
+                }];
+            }
+        }
+        return;
+    }
+
+    // Permission granted after background relaunch — resume if we were tracking before
+    if ((status == kCLAuthorizationStatusAuthorizedAlways ||
+         status == kCLAuthorizationStatusAuthorizedWhenInUse) &&
+        !self.isTracking &&
         [[NSUserDefaults standardUserDefaults] boolForKey:@"GeoServiceIsTracking"]) {
         [self applyConfigToLocationManager];
-        if (self.coarseTracking) {
-            [self.locationManager startMonitoringSignificantLocationChanges];
-        } else {
+        [self.locationManager startMonitoringSignificantLocationChanges];
+        if (!self.coarseTracking) {
             [self.locationManager startUpdatingLocation];
         }
         self.isTracking = YES;
+        if (self.debugMode) RCTLogInfo(@"[RNGeoService] Tracking resumed after auth grant");
     }
 }
 

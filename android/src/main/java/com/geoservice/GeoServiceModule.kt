@@ -8,10 +8,14 @@ import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.google.android.gms.location.LocationServices
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 class GeoServiceModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -103,6 +107,7 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
             registerLocationReceiver()
             startLocationService()
             saveTrackingState(true)
+            scheduleWatchdog()
             log("Tracking started")
             promise.resolve(null)
         } catch (e: Exception) {
@@ -115,6 +120,7 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
         try {
             reactContext.stopService(Intent(reactContext, LocationService::class.java))
             saveTrackingState(false)
+            cancelWatchdog()
             log("Tracking stopped")
             promise.resolve(null)
         } catch (e: Exception) {
@@ -261,6 +267,21 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
             .edit()
             .putBoolean(BootReceiver.KEY_IS_TRACKING, isTracking)
             .apply()
+    }
+
+    private fun scheduleWatchdog() {
+        val request = PeriodicWorkRequestBuilder<WatchdogWorker>(15, TimeUnit.MINUTES).build()
+        WorkManager.getInstance(reactContext).enqueueUniquePeriodicWork(
+            WatchdogWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
+        log("Watchdog scheduled (15-min interval)")
+    }
+
+    private fun cancelWatchdog() {
+        WorkManager.getInstance(reactContext).cancelUniqueWork(WatchdogWorker.WORK_NAME)
+        log("Watchdog cancelled")
     }
 
     private fun log(msg: String) {
