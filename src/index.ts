@@ -56,27 +56,11 @@ export function _isDebugMode(): boolean { return _debugMode; }
 /**
  * Configure the geo service. Call this before start().
  * Safe to call multiple times; subsequent calls update the config.
- *
- * When debug: true, a draggable debug overlay is mounted automatically —
- * no component needs to be added to the app.
  */
 async function configure(config: GeoServiceConfig): Promise<void> {
-  const wasDebug = _debugMode;
   _debugMode = config.debug ?? false;
   const merged = { ...DEFAULT_CONFIG, ...config };
-  const result = nativeModule.configure(merged);
-
-  // Lazy require to avoid circular dependency at module init time.
-  // autoDebug → GeoDebugOverlay → GeoDebugPanel → index (all lazy references).
-  if (_debugMode && !wasDebug) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    (require('./autoDebug') as typeof import('./autoDebug')).mountDebugOverlay();
-  } else if (!_debugMode && wasDebug) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    (require('./autoDebug') as typeof import('./autoDebug')).unmountDebugOverlay();
-  }
-
-  return result;
+  return nativeModule.configure(merged);
 }
 
 /**
@@ -85,24 +69,14 @@ async function configure(config: GeoServiceConfig): Promise<void> {
  * On iOS, this starts standard or significant-change location monitoring.
  */
 async function start(): Promise<void> {
-  const result = nativeModule.start();
-  if (_debugMode) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    (require('./autoDebug') as typeof import('./autoDebug')).mountDebugOverlay();
-  }
-  return result;
+  return nativeModule.start();
 }
 
 /**
  * Stop background location tracking.
  */
 async function stop(): Promise<void> {
-  const result = nativeModule.stop();
-  if (_debugMode) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    (require('./autoDebug') as typeof import('./autoDebug')).unmountDebugOverlay();
-  }
-  return result;
+  return nativeModule.stop();
 }
 
 /**

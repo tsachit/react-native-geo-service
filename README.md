@@ -6,7 +6,7 @@ Battery-efficient background geolocation for React Native — a lightweight, fre
 - Keeps tracking when the app is backgrounded or killed (headless mode)
 - Uses `FusedLocationProviderClient` on Android and `CLLocationManager` on iOS
 - **Adaptive accuracy** — GPS turns off automatically when the device is idle and wakes the moment movement is detected
-- **Debug panel** — draggable floating overlay that mounts automatically when `debug: true`, showing live metrics, GPS activity, and battery saving suggestions with no component needed in the app tree
+- **Debug panel** — draggable floating overlay showing live metrics, GPS activity, and battery saving suggestions; add `<GeoDebugOverlay />` once and it self-manages based on `debug: true` and tracking state
 - Fully configurable from JavaScript — no API keys, no license required
 
 ---
@@ -314,37 +314,32 @@ Set `debug: true` in `configure()` to enable debug features:
 - **Both** — verbose native logging via `console.log` / `Logcat`
 - **Both** — a floating debug panel appears automatically showing live metrics and battery saving suggestions
 
-### Setup (one-time)
+### Setup
 
-Add one import to the **top** of your app's `index.js`, before `AppRegistry.registerComponent`. This registers the overlay host so the panel can mount itself automatically when `debug: true` — no component needed anywhere in the app.
+Add `<GeoDebugOverlay />` once to your component tree, co-located with wherever you call `useLocationTracking` or `RNGeoService.start()`. It self-manages visibility — it only shows when `debug: true` is set in `configure()` and tracking is active.
 
-```ts
-// index.js
-import 'react-native-gesture-handler';
-import '@tsachit/react-native-geo-service/debug-panel'; // ← add this once
-import { AppRegistry } from 'react-native';
-import App from './App';
-import { name as appName } from './app.json';
+```tsx
+import { GeoDebugOverlay } from '@tsachit/react-native-geo-service';
 
-AppRegistry.registerComponent(appName, () => App);
+// Render it alongside your navigation root or wherever tracking is used:
+return (
+  <>
+    <YourNavigator />
+    <GeoDebugOverlay />
+  </>
+);
 ```
 
-> **Why must it be in `index.js`?** React Native's `AppRegistry.setWrapperComponentProvider` must be called before `registerComponent` — the same reason `react-native-gesture-handler` must also be imported there. Placing it anywhere else (e.g. inside a hook or screen) is too late; the app root has already mounted.
-
-### Auto-mount debug panel
-
-Once the setup import is in place, the panel mounts and unmounts automatically:
+Then set `debug: true` in your config:
 
 ```ts
-// Panel appears automatically when tracking starts
 await RNGeoService.configure({ debug: true, ... });
-await RNGeoService.start(); // ← panel is now visible
+await RNGeoService.start(); // panel becomes visible automatically
 
-// Panel is removed when tracking stops
-await RNGeoService.stop();
+await RNGeoService.stop();  // panel hides automatically
 ```
 
-No `<GeoDebugPanel />` or `<GeoDebugOverlay />` needed anywhere in the component tree.
+> **Note:** `GeoDebugOverlay` is a standard React component — it renders nothing in production when `debug: false`. It is safe to leave in the tree at all times.
 
 ### Debug panel behaviour
 
@@ -376,17 +371,14 @@ The panel is a **draggable, minimizable floating overlay** that starts minimized
 
 > **Note:** Battery drain is measured at the whole-device level since iOS and Android do not expose per-app battery consumption via public APIs. Use GPS active % and updates/min as the primary indicators of how much the package itself is contributing.
 
-### Manual usage (optional)
+### Manual panel (optional)
 
-If you prefer to control rendering yourself, `GeoDebugPanel` and `GeoDebugOverlay` are also exported for direct use — the `debug-panel` setup import is still required for them to render correctly.
+If you want always-visible or a custom poll interval, use `GeoDebugPanel` directly:
 
 ```tsx
-import { GeoDebugPanel, GeoDebugOverlay } from '@tsachit/react-native-geo-service';
+import { GeoDebugPanel } from '@tsachit/react-native-geo-service';
 
-// Renders anywhere in your tree — self-hides when tracking is inactive:
-<GeoDebugOverlay />
-
-// Always-visible panel with custom poll interval:
+// Always-visible panel, refreshes every 15s:
 <GeoDebugPanel pollInterval={15000} />
 ```
 
