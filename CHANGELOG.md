@@ -4,6 +4,20 @@ All notable changes to `@tsachit/react-native-geo-service` are documented here.
 
 ---
 
+## [1.0.3] — 2026-04-04
+
+### Changed
+- `Geopoints` replaces `Updates` as the metric label for total locations received in the debug panel
+- Metric description updated from `"total location received"` to `"total locations received"`
+- Removed `debug-panel` entry point and `react-native-root-siblings` dependency — incompatible with React Native New Architecture (Bridgeless mode)
+- Debug overlay is now a standard React component: add `<GeoDebugOverlay />` once to your component tree and it self-manages visibility based on `debug: true` and tracking state; no import of `@tsachit/react-native-geo-service/debug-panel` required
+- README updated: debug section rewritten to reflect `<GeoDebugOverlay />` component approach for both iOS and Android
+
+### Fixed
+- Removed `react-native-root-siblings` + `AppRegistry.setWrapperComponentProvider` approach that caused a `PlatformConstants not found` crash on New Architecture (Bridgeless mode) apps at startup
+
+---
+
 ## [1.0.2] — 2026-04-04
 
 ### Added
@@ -21,10 +35,10 @@ All notable changes to `@tsachit/react-native-geo-service` are documented here.
   - `isCharging` — whether the device is currently charging
   - `levelAtStart` — battery level when `start()` was called
   - `drainSinceStart` — total battery percentage dropped since tracking started
-  - `updateCount` — number of location fixes received this session
+  - `updateCount` — total number of location received this session
   - `trackingElapsedSeconds` — seconds since `start()` was called
   - `gpsActiveSeconds` — seconds the GPS chip was actively running (vs low-power idle)
-  - `updatesPerMinute` — rolling average of location fixes per minute
+  - `updatesPerMinute` — rolling average of total location per minute
   - `drainRatePerHour` — projected battery drain rate in %/hr
 - iOS native: `batteryLevelAtStart`, `updateCount`, `trackingStartTime`, `gpsActiveSeconds`, and `gpsActiveStart` properties added to `RNGeoService.m`; GPS active time accumulated when adaptive accuracy transitions between idle and active states
 - Android native: `batteryLevelAtStart`, `updateCount`, `trackingStartTimeMs`, `gpsAccumulatedMs`, and `gpsActiveWindowStartMs` added to `LocationService.kt` companion object; `currentGpsActiveMs` computed property accounts for in-progress active window
