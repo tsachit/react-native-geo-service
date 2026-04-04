@@ -341,6 +341,10 @@ await RNGeoService.stop();  // panel hides automatically
 
 > **Note:** `GeoDebugOverlay` is a standard React component — it renders nothing in production when `debug: false`. It is safe to leave in the tree at all times.
 
+| Minimized | Opened |
+|--------|-------------|
+| <img width="349" height="261" alt="image" src="https://github.com/user-attachments/assets/a6b43b93-7a93-485d-a68d-f4e4fe658011" /> | <img width="363" height="348" alt="image" src="https://github.com/user-attachments/assets/9c02ebc9-28f2-4983-982b-810c98a32dfe" /> |
+
 ### Debug panel behaviour
 
 The panel is a **draggable, minimizable floating overlay** that starts minimized:
