@@ -168,7 +168,7 @@ export interface BatteryInfo {
   /** Percentage points drained since tracking started */
   drainSinceStart: number;
 
-  /** How many location fixes have been delivered since start() */
+  /** How many total location have been delivered since start() */
   updateCount: number;
   /** Total seconds since start() was called */
   trackingElapsedSeconds: number;

@@ -243,9 +243,9 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
                 value={elapsed > 0 ? formatElapsed(elapsed) : '—'}
                 desc="session duration" />
               <MetricBox
-                label="Updates"
+                label="Geopoints"
                 value={`${updates}`}
-                desc="location fixes received" />
+                desc="total locations received" />
               <MetricBox
                 label="Updates/min"
                 value={upm > 0 ? upm.toFixed(1) : '—'}

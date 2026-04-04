@@ -284,10 +284,10 @@ interface BatteryInfo {
   levelAtStart: number;           // battery level when start() was called
   drainSinceStart: number;        // total % dropped since start() (whole device)
 
-  updateCount: number;            // location fixes received this session
+  updateCount: number;            // total location received this session
   trackingElapsedSeconds: number; // seconds since start() was called
   gpsActiveSeconds: number;       // seconds the GPS chip was actively running
-  updatesPerMinute: number;       // average location fixes per minute
+  updatesPerMinute: number;       // average total location per minute
   drainRatePerHour: number;       // battery drain rate in %/hr (whole device)
 }
 ```
@@ -312,11 +312,11 @@ Set `debug: true` in `configure()` to enable debug features:
 - **iOS** — forces the blue location arrow in the status bar while tracking is active
 - **Android** — notification title changes to `[DEBUG] <title>` so you can confirm the foreground service is running
 - **Both** — verbose native logging via `console.log` / `Logcat`
-- **Both** — a floating debug panel appears automatically showing live metrics and battery saving suggestions
+- **Both** — a floating debug panel shows live metrics and battery saving suggestions; add `<GeoDebugOverlay />` once to your component tree and it self-manages visibility
 
 ### Setup
 
-Add `<GeoDebugOverlay />` once to your component tree, co-located with wherever you call `useLocationTracking` or `RNGeoService.start()`. It self-manages visibility — it only shows when `debug: true` is set in `configure()` and tracking is active.
+Add `<GeoDebugOverlay />` once to your component tree, co-located with wherever you call `RNGeoService.start()`. It self-manages visibility — it only shows when `debug: true` is set in `configure()` and tracking is active.
 
 ```tsx
 import { GeoDebugOverlay } from '@tsachit/react-native-geo-service';
@@ -354,7 +354,7 @@ The panel is a **draggable, minimizable floating overlay** that starts minimized
 | Metric | Description |
 |--------|-------------|
 | Tracking for | How long the current session has been running |
-| Updates | Total location fixes received |
+| Geopoints | Total locations received |
 | Updates/min | Average frequency of location updates |
 | GPS active | % of session time the GPS chip was on vs idle |
 | Battery now | Current device battery level |
@@ -369,16 +369,15 @@ The panel is a **draggable, minimizable floating overlay** that starts minimized
 - 🔴 Drain rate > 8%/hr → try `'balanced'` accuracy or longer update intervals
 - ✅ All metrics in range → confirms settings are efficient
 
-> **Note:** Battery drain is measured at the whole-device level since iOS and Android do not expose per-app battery consumption via public APIs. Use GPS active % and updates/min as the primary indicators of how much the package itself is contributing.
+> **Note:** Battery drain is measured at the whole-device level since iOS and Android do not expose per-app battery consumption via public APIs. Use GPS active % and updates/min as the primary indicators of how much this package contributes.
 
 ### Manual panel (optional)
 
-If you want always-visible or a custom poll interval, use `GeoDebugPanel` directly:
+For a custom poll interval or always-visible panel, use `GeoDebugPanel` directly:
 
 ```tsx
 import { GeoDebugPanel } from '@tsachit/react-native-geo-service';
 
-// Always-visible panel, refreshes every 15s:
 <GeoDebugPanel pollInterval={15000} />
 ```
 
@@ -411,7 +410,7 @@ Upon relaunch, the module detects `UIApplicationLaunchOptionsLocationKey`, resto
 - On iOS, use `coarseTracking: true` if ~500m granularity is acceptable — uses cell towers only
 - On Android, increase `updateIntervalMs` (e.g. `10000`) to give FusedLocationProvider room to batch fixes
 - Set `motionActivity: 'automotiveNavigation'` or `'fitness'` so iOS applies activity-specific optimisations
-- Use the `GeoDebugPanel` to measure real-world impact and act on its suggestions
+- Use the debug overlay (`debug: true`) to measure real-world impact and act on its suggestions
 
 ---
 
