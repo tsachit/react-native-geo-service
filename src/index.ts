@@ -10,6 +10,7 @@ import {
   Location,
   LocationCallback,
   ErrorCallback,
+  BatteryInfo,
 } from './types';
 
 export * from './types';
@@ -47,13 +48,35 @@ const DEFAULT_CONFIG: GeoServiceConfig = {
   debug: false,
 };
 
+// Tracks the debug flag set via configure() so GeoDebugOverlay can
+// read it without the consuming app having to pass it as a prop.
+let _debugMode = false;
+export function _isDebugMode(): boolean { return _debugMode; }
+
 /**
  * Configure the geo service. Call this before start().
  * Safe to call multiple times; subsequent calls update the config.
+ *
+ * When debug: true, a draggable debug overlay is mounted automatically —
+ * no component needs to be added to the app.
  */
 async function configure(config: GeoServiceConfig): Promise<void> {
+  const wasDebug = _debugMode;
+  _debugMode = config.debug ?? false;
   const merged = { ...DEFAULT_CONFIG, ...config };
-  return nativeModule.configure(merged);
+  const result = nativeModule.configure(merged);
+
+  // Lazy require to avoid circular dependency at module init time.
+  // autoDebug → GeoDebugOverlay → GeoDebugPanel → index (all lazy references).
+  if (_debugMode && !wasDebug) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('./autoDebug') as typeof import('./autoDebug')).mountDebugOverlay();
+  } else if (!_debugMode && wasDebug) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('./autoDebug') as typeof import('./autoDebug')).unmountDebugOverlay();
+  }
+
+  return result;
 }
 
 /**
@@ -62,14 +85,24 @@ async function configure(config: GeoServiceConfig): Promise<void> {
  * On iOS, this starts standard or significant-change location monitoring.
  */
 async function start(): Promise<void> {
-  return nativeModule.start();
+  const result = nativeModule.start();
+  if (_debugMode) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('./autoDebug') as typeof import('./autoDebug')).mountDebugOverlay();
+  }
+  return result;
 }
 
 /**
  * Stop background location tracking.
  */
 async function stop(): Promise<void> {
-  return nativeModule.stop();
+  const result = nativeModule.stop();
+  if (_debugMode) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('./autoDebug') as typeof import('./autoDebug')).unmountDebugOverlay();
+  }
+  return result;
 }
 
 /**
@@ -136,6 +169,22 @@ function registerHeadlessTask(
   AppRegistry.registerHeadlessTask(taskName, () => handler);
 }
 
+/**
+ * Returns battery information including current level and drain since tracking started.
+ * Only meaningful after start() has been called.
+ */
+async function getBatteryInfo(): Promise<BatteryInfo> {
+  return nativeModule.getBatteryInfo();
+}
+
+/**
+ * Show or hide the status bar location indicator at runtime (iOS only).
+ * On Android this is a no-op — the foreground notification handles visibility.
+ */
+async function setLocationIndicator(show: boolean): Promise<void> {
+  return nativeModule.setLocationIndicator(show);
+}
+
 const RNGeoService = {
   configure,
   start,
@@ -145,6 +194,10 @@ const RNGeoService = {
   onLocation,
   onError,
   registerHeadlessTask,
+  getBatteryInfo,
+  setLocationIndicator,
 };
 
 export default RNGeoService;
+export { GeoDebugPanel } from './GeoDebugPanel';
+export { GeoDebugOverlay } from './GeoDebugOverlay';

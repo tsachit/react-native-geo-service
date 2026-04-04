@@ -157,3 +157,25 @@ export type ErrorCallback = (error: LocationError) => void;
 export interface GeoSubscription {
   remove(): void;
 }
+
+export interface BatteryInfo {
+  /** Current battery level 0–100 */
+  level: number;
+  /** Whether the device is currently charging */
+  isCharging: boolean;
+  /** Battery level when tracking was started (0–100) */
+  levelAtStart: number;
+  /** Percentage points drained since tracking started */
+  drainSinceStart: number;
+
+  /** How many location fixes have been delivered since start() */
+  updateCount: number;
+  /** Total seconds since start() was called */
+  trackingElapsedSeconds: number;
+  /** Seconds the GPS chip was actively running (not in idle/low-power mode) */
+  gpsActiveSeconds: number;
+  /** Location updates per minute (averaged over entire session) */
+  updatesPerMinute: number;
+  /** Battery drain rate in percentage points per hour */
+  drainRatePerHour: number;
+}

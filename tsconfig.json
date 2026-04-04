@@ -3,6 +3,7 @@
     "target": "ES6",
     "module": "commonjs",
     "lib": ["ES6"],
+    "jsx": "react-native",
     "declaration": true,
     "declarationDir": "lib",
     "outDir": "lib",

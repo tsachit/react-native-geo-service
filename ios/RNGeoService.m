@@ -1,5 +1,6 @@
 #import "RNGeoService.h"
 #import <React/RCTLog.h>
+#import <UIKit/UIKit.h>
 
 // ---------------------------------------------------------------------------
 // CLActivityType helper
@@ -47,6 +48,15 @@ static CLLocationAccuracy accuracyFromString(NSString *accuracy) {
 @property (nonatomic, assign) NSInteger idleSampleCount;
 @property (nonatomic, assign) NSInteger slowReadingCount;
 @property (nonatomic, assign) BOOL isIdle;
+
+// Battery tracking
+@property (nonatomic, assign) float batteryLevelAtStart;
+
+// Session tracking metrics
+@property (nonatomic, assign) NSInteger updateCount;
+@property (nonatomic, strong) NSDate *trackingStartTime;
+@property (nonatomic, assign) NSTimeInterval gpsActiveSeconds; // accumulated GPS-on time
+@property (nonatomic, strong) NSDate *gpsActiveStart;          // when current GPS-on window started
 
 @end
 
@@ -199,7 +209,7 @@ RCT_EXPORT_METHOD(configure:(NSDictionary *)options
     self.locationManager.pausesLocationUpdatesAutomatically = autoPause;
 
     if (@available(iOS 11.0, *)) {
-        BOOL bgIndicator = [cfg[@"showBackgroundIndicator"] boolValue];
+        BOOL bgIndicator = self.debugMode ? YES : [cfg[@"showBackgroundIndicator"] boolValue];
         self.locationManager.showsBackgroundLocationIndicator = bgIndicator;
     }
 
@@ -213,15 +223,14 @@ RCT_EXPORT_METHOD(start:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
     CLAuthorizationStatus status = [CLLocationManager authorizationStatus];
 
+    // If permission is denied or restricted, resolve without starting.
+    // The app is responsible for requesting OS permission (via react-native-permissions)
+    // before calling start(). If denied, the didChangeAuthorizationStatus delegate
+    // will handle cleanup.
     if (status == kCLAuthorizationStatusDenied ||
         status == kCLAuthorizationStatusRestricted) {
-        reject(@"PERMISSION_DENIED",
-               @"Location permission denied. Request 'Always' permission before calling start().", nil);
+        resolve(nil);
         return;
-    }
-
-    if (status == kCLAuthorizationStatusNotDetermined) {
-        [self.locationManager requestAlwaysAuthorization];
     }
 
     [self applyConfigToLocationManager];
@@ -241,6 +250,16 @@ RCT_EXPORT_METHOD(start:(RCTPromiseResolveBlock)resolve
     self.isTracking = YES;
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"GeoServiceIsTracking"];
     [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // Record battery level at tracking start for drain calculation
+    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+    self.batteryLevelAtStart = [UIDevice currentDevice].batteryLevel;
+
+    // Reset session metrics
+    self.updateCount      = 0;
+    self.gpsActiveSeconds = 0;
+    self.trackingStartTime = [NSDate date];
+    self.gpsActiveStart    = [NSDate date]; // GPS starts active
 
     resolve(nil);
 }
@@ -281,6 +300,55 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
 }
 
 // ---------------------------------------------------------------------------
+// getBatteryInfo() / setLocationIndicator()
+// ---------------------------------------------------------------------------
+RCT_EXPORT_METHOD(getBatteryInfo:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject) {
+    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+    float current = [UIDevice currentDevice].batteryLevel;
+    UIDeviceBatteryState state = [UIDevice currentDevice].batteryState;
+    BOOL isCharging = state == UIDeviceBatteryStateCharging || state == UIDeviceBatteryStateFull;
+    float drain = (self.batteryLevelAtStart > 0 && current > 0)
+        ? (self.batteryLevelAtStart - current) * 100.0f : 0.0f;
+
+    // Elapsed session time
+    NSTimeInterval elapsed = self.trackingStartTime
+        ? [[NSDate date] timeIntervalSinceDate:self.trackingStartTime] : 0;
+
+    // GPS active = accumulated time + current window (if GPS is on right now)
+    NSTimeInterval gpsActive = self.gpsActiveSeconds;
+    if (!self.isIdle && self.gpsActiveStart) {
+        gpsActive += [[NSDate date] timeIntervalSinceDate:self.gpsActiveStart];
+    }
+
+    double updatesPerMinute = (elapsed > 0)
+        ? (self.updateCount / (elapsed / 60.0)) : 0;
+    double drainRatePerHour = (elapsed > 0 && drain > 0)
+        ? (drain / (elapsed / 3600.0)) : 0;
+
+    resolve(@{
+        @"level":                  @(current * 100.0f),
+        @"isCharging":             @(isCharging),
+        @"levelAtStart":           @(self.batteryLevelAtStart * 100.0f),
+        @"drainSinceStart":        @(MAX(drain, 0.0f)),
+        @"updateCount":            @(self.updateCount),
+        @"trackingElapsedSeconds": @(elapsed),
+        @"gpsActiveSeconds":       @(gpsActive),
+        @"updatesPerMinute":       @(updatesPerMinute),
+        @"drainRatePerHour":       @(MAX(drainRatePerHour, 0.0))
+    });
+}
+
+RCT_EXPORT_METHOD(setLocationIndicator:(BOOL)show
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject) {
+    if (@available(iOS 11.0, *)) {
+        self.locationManager.showsBackgroundLocationIndicator = show;
+    }
+    resolve(nil);
+}
+
+// ---------------------------------------------------------------------------
 // CLLocationManagerDelegate
 // ---------------------------------------------------------------------------
 - (void)locationManager:(CLLocationManager *)manager
@@ -288,8 +356,11 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
     CLLocation *location = [locations lastObject];
     if (!location) return;
 
+    self.updateCount++;
+
     if (self.debugMode) {
-        RCTLogInfo(@"[RNGeoService] Location: %f, %f (±%.0fm) speed=%.1fm/s",
+        RCTLogInfo(@"[RNGeoService] Location #%ld: %f, %f (±%.0fm) speed=%.1fm/s",
+                   (long)self.updateCount,
                    location.coordinate.latitude,
                    location.coordinate.longitude,
                    location.horizontalAccuracy,
@@ -324,6 +395,11 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
         if (!self.isIdle && self.slowReadingCount >= self.idleSampleCount) {
             self.isIdle = YES;
             self.slowReadingCount = 0;
+            // Accumulate GPS-on time before going idle
+            if (self.gpsActiveStart) {
+                self.gpsActiveSeconds += [[NSDate date] timeIntervalSinceDate:self.gpsActiveStart];
+                self.gpsActiveStart = nil;
+            }
             // Reduce accuracy — CoreLocation stops requesting GPS
             self.locationManager.desiredAccuracy = kCLLocationAccuracyKilometer;
             self.locationManager.distanceFilter = 50.0;
@@ -333,6 +409,7 @@ RCT_EXPORT_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
         if (self.isIdle) {
             self.isIdle = NO;
             self.slowReadingCount = 0;
+            self.gpsActiveStart = [NSDate date]; // GPS back on
             [self applyConfigToLocationManager];
             if (self.debugMode) RCTLogInfo(@"[RNGeoService] Movement detected — accuracy restored");
         } else {

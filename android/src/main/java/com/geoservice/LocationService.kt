@@ -25,6 +25,21 @@ class LocationService : Service() {
 
         var isRunning = false
             private set
+
+        // Session tracking metrics (readable by GeoServiceModule)
+        var updateCount: Long = 0
+            private set
+        var trackingStartTimeMs: Long = 0
+            private set
+        // Accumulated GPS-on milliseconds (excludes current open window)
+        private var gpsAccumulatedMs: Long = 0
+        // When the current GPS-on window started (0 = GPS currently idle)
+        private var gpsActiveWindowStartMs: Long = 0
+
+        /** Total GPS-active ms including any currently open window */
+        val currentGpsActiveMs: Long
+            get() = gpsAccumulatedMs +
+                if (gpsActiveWindowStartMs > 0) System.currentTimeMillis() - gpsActiveWindowStartMs else 0L
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -62,6 +77,12 @@ class LocationService : Service() {
 
         slowReadingCount = 0
         isIdle = false
+
+        // Reset session metrics
+        updateCount = 0
+        trackingStartTimeMs = System.currentTimeMillis()
+        gpsAccumulatedMs = 0
+        gpsActiveWindowStartMs = System.currentTimeMillis() // GPS starts active
 
         log("Starting — adaptiveAccuracy=${config.adaptiveAccuracy}, accuracy=${config.accuracy}")
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -179,6 +200,7 @@ class LocationService : Service() {
     // ---------------------------------------------------------------------------
 
     private fun handleLocation(location: android.location.Location) {
+        updateCount++
         if (config.adaptiveAccuracy) {
             evaluateMotionState(location)
         }
@@ -193,6 +215,11 @@ class LocationService : Service() {
             if (!isIdle && slowReadingCount >= config.idleSampleCount) {
                 isIdle = true
                 slowReadingCount = 0
+                // Accumulate GPS-on time before going idle
+                if (gpsActiveWindowStartMs > 0) {
+                    gpsAccumulatedMs += System.currentTimeMillis() - gpsActiveWindowStartMs
+                    gpsActiveWindowStartMs = 0
+                }
                 log("Device idle — switching to LOW_POWER (GPS off)")
                 startLocationUpdates(idleOverride = true)
             }
@@ -200,6 +227,7 @@ class LocationService : Service() {
             if (isIdle) {
                 isIdle = false
                 slowReadingCount = 0
+                gpsActiveWindowStartMs = System.currentTimeMillis() // GPS back on
                 log("Movement detected — restoring ${config.accuracy} accuracy")
                 startLocationUpdates(idleOverride = false)
             } else {
@@ -308,9 +336,12 @@ class LocationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT
         val pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, pendingFlags)
 
+        val title = if (config.debug) "[DEBUG] ${config.serviceTitle}" else config.serviceTitle
+        val body = if (config.debug) "Tracking active — debug mode on" else config.serviceBody
+
         return builder
-            .setContentTitle(config.serviceTitle)
-            .setContentText(config.serviceBody)
+            .setContentTitle(title)
+            .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
             .setContentIntent(pendingIntent)

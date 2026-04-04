@@ -8,7 +8,9 @@
     "lib",
     "android",
     "ios",
-    "react-native-geo-service.podspec"
+    "react-native-geo-service.podspec",
+    "debug-panel.js",
+    "debug-panel.d.ts"
   ],
   "scripts": {
     "build": "tsc",
@@ -28,6 +30,7 @@
     "react-native": ">=0.60.0"
   },
   "devDependencies": {
+    "@types/react": "^18.3.28",
     "@types/react-native": "0.73.0",
     "typescript": "5.9.3"
   },
@@ -38,5 +41,8 @@
   "bugs": {
     "url": "https://github.com/tsachit/react-native-geo-service/issues"
   },
-  "homepage": "https://github.com/tsachit/react-native-geo-service#readme"
+  "homepage": "https://github.com/tsachit/react-native-geo-service#readme",
+  "dependencies": {
+    "react-native-root-siblings": "^5.0.1"
+  }
 }

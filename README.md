@@ -1,21 +1,22 @@
-# react-native-geo-service
+# @tsachit/react-native-geo-service
 
-Battery-efficient background geolocation for React Native.
+Battery-efficient background geolocation for React Native — a lightweight, free alternative to commercial packages.
 
 - Tracks location as the user moves and fires a JS listener
-- Keeps tracking in the background and when the app is killed (headless mode)
-- Uses `FusedLocationProviderClient` on Android and `CLLocationManager` on iOS for maximum battery savings
-- **Adaptive accuracy**: GPS turns off automatically when the device is idle and wakes up the moment movement is detected
-- Fully configurable from JavaScript
+- Keeps tracking when the app is backgrounded or killed (headless mode)
+- Uses `FusedLocationProviderClient` on Android and `CLLocationManager` on iOS
+- **Adaptive accuracy** — GPS turns off automatically when the device is idle and wakes the moment movement is detected
+- **Debug panel** — draggable floating overlay that mounts automatically when `debug: true`, showing live metrics, GPS activity, and battery saving suggestions with no component needed in the app tree
+- Fully configurable from JavaScript — no API keys, no license required
 
 ---
 
 ## Installation
 
 ```bash
-npm install react-native-geo-service
+yarn add @tsachit/react-native-geo-service
 # or
-yarn add react-native-geo-service
+npm install @tsachit/react-native-geo-service
 ```
 
 ### iOS
@@ -24,7 +25,7 @@ yarn add react-native-geo-service
 cd ios && pod install
 ```
 
-Add the following to your `Info.plist`:
+Add to your `Info.plist`:
 
 ```xml
 <!-- Required — explain why you need location -->
@@ -41,23 +42,18 @@ Add the following to your `Info.plist`:
 </array>
 ```
 
-#### iOS Headless Mode (app terminated)
+#### iOS — AppDelegate (headless relaunch)
 
-When the app is terminated, iOS can still wake it up for location events if you use
-`coarseTracking: true` (fires when the device moves ~500 m) or standard background
-location updates (requires the Always permission).
-
-Add this to your **AppDelegate** so tracking resumes after a background relaunch:
+When iOS relaunches a terminated app for a location event, add this so tracking resumes automatically:
 
 ```objc
 // AppDelegate.m
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
 
-    // If the app was relaunched in the background due to a location event,
-    // the location manager delegate will resume tracking automatically.
     if (launchOptions[UIApplicationLaunchOptionsLocationKey]) {
-        // Optionally restore your RNGeoService.configure() call here.
+        // RNGeoService detects this automatically and resumes tracking
+        // from the config it persisted to NSUserDefaults before termination.
     }
 
     // ... rest of your setup
@@ -70,7 +66,7 @@ Add this to your **AppDelegate** so tracking resumes after a background relaunch
 
 #### 1. Register the package
 
-**`android/app/src/main/java/.../MainApplication.kt`** (or `.java`):
+**`android/app/src/main/java/.../MainApplication.kt`**:
 
 ```kotlin
 import com.geoservice.GeoServicePackage
@@ -83,7 +79,7 @@ override fun getPackages(): List<ReactPackage> =
 
 #### 2. Register the HeadlessJS task
 
-In your app's **`index.js`** (at the top level, outside any component):
+In your app's **`index.js`** (top level, outside any component):
 
 ```js
 import { AppRegistry } from 'react-native';
@@ -91,97 +87,113 @@ import App from './App';
 
 AppRegistry.registerComponent('YourApp', () => App);
 
-// Register the background task for when the app is not in the foreground.
-// This runs even when the app is killed (as long as the foreground service is active).
+// Handles location events when the React context is not active.
+// Runs even when the app is killed (foreground service must be running).
 AppRegistry.registerHeadlessTask('GeoServiceHeadlessTask', () => async (location) => {
   console.log('[Background] Location:', location);
-  // Send to your server using a pre-stored auth token (e.g. from SecureStore/Keychain).
-  // Avoid relying on in-memory app state — the JS context here is headless and isolated.
+  // Send to your server using a pre-stored auth token (e.g. SecureStore/Keychain).
+  // Do not rely on in-memory state — this JS context is isolated.
 });
 ```
 
 #### 3. Add permissions to `AndroidManifest.xml`
 
-The library's manifest already declares the permissions, but your **app's** manifest must
-also include them (merging happens at build time):
-
 ```xml
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-<!-- Android 10+ — required for background access: -->
+<!-- Android 10+ — required for background access -->
 <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-```
-
-#### 4. Request permissions at runtime
-
-On Android 10+ you must request `ACCESS_BACKGROUND_LOCATION` **separately**, after the
-user has already granted foreground location. Use
-[`react-native-permissions`](https://github.com/zoontek/react-native-permissions) or the
-built-in `PermissionsAndroid` API.
-
-```js
-import { PermissionsAndroid, Platform } from 'react-native';
-
-async function requestLocationPermissions() {
-  if (Platform.OS !== 'android') return;
-
-  await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-  );
-
-  // Android 10+ requires a second, separate request for background
-  if (Platform.Version >= 29) {
-    await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION
-    );
-  }
-}
 ```
 
 ---
 
 ## Usage
 
-```ts
-import RNGeoService from 'react-native-geo-service';
+### Request permissions first
 
-// 1. Configure (call once, before start)
+Always request OS permission before calling `start()`. We recommend [`react-native-permissions`](https://github.com/zoontek/react-native-permissions):
+
+```ts
+import { request, PERMISSIONS, RESULTS, Platform } from 'react-native-permissions';
+
+async function requestLocationPermissions(): Promise<boolean> {
+  if (Platform.OS === 'ios') {
+    const result = await request(PERMISSIONS.IOS.LOCATION_ALWAYS);
+    return result === RESULTS.GRANTED;
+  }
+
+  const fine = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+  if (fine !== RESULTS.GRANTED) return false;
+
+  if (Number(Platform.Version) >= 29) {
+    const bg = await request(PERMISSIONS.ANDROID.ACCESS_BACKGROUND_LOCATION);
+    return bg === RESULTS.GRANTED;
+  }
+  return true;
+}
+```
+
+### Start tracking
+
+```ts
+import RNGeoService from '@tsachit/react-native-geo-service';
+
+// 1. Request OS permission
+const granted = await requestLocationPermissions();
+if (!granted) return;
+
+// 2. Configure (call once before start, safe to call again to update)
 await RNGeoService.configure({
-  minDistanceMeters: 10,       // fire update every 10 metres of movement
-  accuracy: 'balanced',        // balanced accuracy = good battery
-  stopOnAppClose: false,       // keep tracking even when app is killed
-  restartOnBoot: true,         // restart on device reboot (Android)
+  minDistanceMeters: 10,
+  accuracy: 'balanced',
+  stopOnAppClose: false,
+  restartOnBoot: true,
   serviceTitle: 'Tracking active',
   serviceBody: 'Your route is being recorded.',
 });
 
-// 2. Start tracking
+// 3. Start tracking
 await RNGeoService.start();
 
-// 3. Listen for location updates
+// 4. Listen for updates
 const subscription = RNGeoService.onLocation((location) => {
   console.log(location.latitude, location.longitude);
-  console.log('GPS idle:', location.isStationary);
+  console.log('Idle (GPS off):', location.isStationary);
 });
 
-// 4. Stop tracking
+// 5. Listen for errors
+const errorSub = RNGeoService.onError((error) => {
+  console.error('Location error:', error.code, error.message);
+});
+
+// 6. Stop
 await RNGeoService.stop();
 
-// 5. Remove listener
+// 7. Clean up listeners
 subscription.remove();
+errorSub.remove();
 ```
 
 ### One-time location
 
 ```ts
 const location = await RNGeoService.getCurrentLocation();
-console.log(location.latitude, location.longitude);
 ```
 
-### Check tracking state
+### Check if tracking
 
 ```ts
 const tracking = await RNGeoService.isTracking();
+```
+
+### Register headless task via the module
+
+Alternatively to `AppRegistry.registerHeadlessTask`, you can use the helper:
+
+```ts
+RNGeoService.registerHeadlessTask(async (location) => {
+  await sendToServer(location);
+});
 ```
 
 ---
@@ -191,7 +203,7 @@ const tracking = await RNGeoService.isTracking();
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `minDistanceMeters` | `number` | `10` | Minimum metres of movement before a location update fires |
-| `accuracy` | `'navigation' \| 'high' \| 'balanced' \| 'low'` | `'balanced'` | Location accuracy (affects battery) |
+| `accuracy` | `'navigation' \| 'high' \| 'balanced' \| 'low'` | `'balanced'` | Location accuracy — higher accuracy uses more battery |
 | `stopOnAppClose` | `boolean` | `false` | Stop tracking when the app is killed |
 | `restartOnBoot` | `boolean` | `false` | Resume tracking after device reboot *(Android only)* |
 | `updateIntervalMs` | `number` | `5000` | Target ms between updates *(Android only)* |
@@ -199,49 +211,215 @@ const tracking = await RNGeoService.isTracking();
 | `serviceTitle` | `string` | `'Location Tracking'` | Foreground service notification title *(Android only)* |
 | `serviceBody` | `string` | `'Your location is being tracked...'` | Foreground service notification body *(Android only)* |
 | `backgroundTaskName` | `string` | `'GeoServiceHeadlessTask'` | HeadlessJS task name *(Android only)* |
-| `motionActivity` | `'other' \| 'automotiveNavigation' \| 'fitness' \| 'otherNavigation' \| 'airborne'` | `'other'` | Hints the OS about usage for power optimisation *(iOS only)* |
-| `autoPauseUpdates` | `boolean` | `false` | Let iOS pause updates when no movement *(iOS only)* |
-| `showBackgroundIndicator` | `boolean` | `false` | Show blue bar in status bar while tracking in background *(iOS only)* |
-| `coarseTracking` | `boolean` | `false` | Use significant-change monitoring — very battery-efficient, wakes app when terminated *(iOS only)* |
-| `adaptiveAccuracy` | `boolean` | `true` | Auto-drop to low-power when idle, restore on movement |
+| `motionActivity` | `'other' \| 'automotiveNavigation' \| 'fitness' \| 'otherNavigation' \| 'airborne'` | `'other'` | Activity hint for iOS power optimisations *(iOS only)* |
+| `autoPauseUpdates` | `boolean` | `false` | Let iOS pause updates when no movement detected *(iOS only)* |
+| `showBackgroundIndicator` | `boolean` | `false` | Show blue location bar in status bar while tracking *(iOS only)* |
+| `coarseTracking` | `boolean` | `false` | Use significant-change monitoring only — very battery-efficient, wakes terminated app *(iOS only)* |
+| `adaptiveAccuracy` | `boolean` | `true` | Auto-drop to low-power when idle, restore on movement (biggest battery saver) |
 | `idleSpeedThreshold` | `number` | `0.5` | Speed in m/s below which a reading counts as idle |
-| `idleSampleCount` | `number` | `3` | Consecutive idle readings before entering low-power mode |
-| `debug` | `boolean` | `false` | Enable verbose native logging |
+| `idleSampleCount` | `number` | `3` | Consecutive idle readings required before entering low-power mode |
+| `debug` | `boolean` | `false` | Enable verbose native logging + debug notification on Android + status bar indicator on iOS |
 
 ---
 
-## Battery saving tips
+## API reference
 
-- Set `accuracy: 'balanced'` unless you need GPS precision.
-- Set `minDistanceMeters` to the minimum distance useful for your use-case (higher = fewer wakes).
-- On iOS, enable `coarseTracking: true` if your app only needs to know when the user
-  has moved to a new area (~500 m). This is the most battery-efficient mode.
-- On Android, a higher `updateIntervalMs` (e.g. `10000`) with a reasonable `minUpdateIntervalMs`
-  gives FusedLocationProvider more room to batch updates and use passive fixes from other apps.
-- Set `motionActivity: 'automotiveNavigation'` or `'fitness'` so iOS can apply activity-specific
-  power optimisations.
-- Leave `adaptiveAccuracy: true` (the default) — this is the single biggest battery saving.
-  GPS turns off completely when parked and wakes up as soon as the device moves.
+### `configure(config)`
+Apply configuration. Safe to call multiple times — subsequent calls update the running config.
+
+### `start()`
+Start background location tracking. Always call `requestLocationPermissions()` before this.
+
+### `stop()`
+Stop tracking and remove the foreground service (Android) / stop CLLocationManager (iOS).
+
+### `isTracking(): Promise<boolean>`
+Returns whether tracking is currently active.
+
+### `getCurrentLocation(): Promise<Location>`
+One-time location fetch from the last known position.
+
+### `onLocation(callback): GeoSubscription`
+Subscribe to location updates. Call `.remove()` on the returned subscription to unsubscribe.
+
+### `onError(callback): GeoSubscription`
+Subscribe to location errors (e.g. permission revoked mid-session).
+
+### `registerHeadlessTask(handler)` *(Android only)*
+Register a function to handle location events when the app is not in the foreground.
+
+### `getBatteryInfo(): Promise<BatteryInfo>`
+Returns battery and session tracking metrics. See [Debug mode](#debug-mode) below.
+
+### `setLocationIndicator(show: boolean)` *(iOS only)*
+Show or hide the blue location indicator in the status bar at runtime. No-op on Android.
+
+---
+
+## Type reference
+
+### `Location`
+
+```ts
+interface Location {
+  latitude: number;
+  longitude: number;
+  accuracy: number;         // horizontal accuracy in metres
+  altitude: number;
+  altitudeAccuracy: number; // vertical accuracy in metres (iOS only, -1 on Android)
+  speed: number;            // m/s, -1 if unavailable
+  bearing: number;          // degrees 0–360, -1 if unavailable
+  timestamp: number;        // Unix ms
+  isFromMockProvider?: boolean; // Android only
+  isStationary?: boolean;   // true when adaptive accuracy has turned GPS off
+}
+```
+
+### `BatteryInfo`
+
+```ts
+interface BatteryInfo {
+  level: number;                  // current battery level 0–100
+  isCharging: boolean;
+  levelAtStart: number;           // battery level when start() was called
+  drainSinceStart: number;        // total % dropped since start() (whole device)
+
+  updateCount: number;            // location fixes received this session
+  trackingElapsedSeconds: number; // seconds since start() was called
+  gpsActiveSeconds: number;       // seconds the GPS chip was actively running
+  updatesPerMinute: number;       // average location fixes per minute
+  drainRatePerHour: number;       // battery drain rate in %/hr (whole device)
+}
+```
+
+### `GeoServiceConfig`
+See [Configuration reference](#configuration-reference) above.
+
+### `GeoSubscription`
+
+```ts
+interface GeoSubscription {
+  remove(): void;
+}
+```
+
+---
+
+## Debug mode
+
+Set `debug: true` in `configure()` to enable debug features:
+
+- **iOS** — forces the blue location arrow in the status bar while tracking is active
+- **Android** — notification title changes to `[DEBUG] <title>` so you can confirm the foreground service is running
+- **Both** — verbose native logging via `console.log` / `Logcat`
+- **Both** — a floating debug panel appears automatically showing live metrics and battery saving suggestions
+
+### Setup (one-time)
+
+Add one import to the **top** of your app's `index.js`, before `AppRegistry.registerComponent`. This registers the overlay host so the panel can mount itself automatically when `debug: true` — no component needed anywhere in the app.
+
+```ts
+// index.js
+import 'react-native-gesture-handler';
+import '@tsachit/react-native-geo-service/debug-panel'; // ← add this once
+import { AppRegistry } from 'react-native';
+import App from './App';
+import { name as appName } from './app.json';
+
+AppRegistry.registerComponent(appName, () => App);
+```
+
+> **Why must it be in `index.js`?** React Native's `AppRegistry.setWrapperComponentProvider` must be called before `registerComponent` — the same reason `react-native-gesture-handler` must also be imported there. Placing it anywhere else (e.g. inside a hook or screen) is too late; the app root has already mounted.
+
+### Auto-mount debug panel
+
+Once the setup import is in place, the panel mounts and unmounts automatically:
+
+```ts
+// Panel appears automatically when tracking starts
+await RNGeoService.configure({ debug: true, ... });
+await RNGeoService.start(); // ← panel is now visible
+
+// Panel is removed when tracking stops
+await RNGeoService.stop();
+```
+
+No `<GeoDebugPanel />` or `<GeoDebugOverlay />` needed anywhere in the component tree.
+
+### Debug panel behaviour
+
+The panel is a **draggable, minimizable floating overlay** that starts minimized:
+
+- **Tap the 📍 circle** to expand
+- **Drag** by holding the striped header bar
+- **Minimize** with the ⊖ button — collapses back to the 📍 circle
+
+**Metrics shown:**
+
+| Metric | Description |
+|--------|-------------|
+| Tracking for | How long the current session has been running |
+| Updates | Total location fixes received |
+| Updates/min | Average frequency of location updates |
+| GPS active | % of session time the GPS chip was on vs idle |
+| Battery now | Current device battery level |
+| Drained | Total device battery % dropped since `start()` |
+| Drain rate | Battery consumed per hour (total device, not just location) |
+
+**Smart suggestions** are shown automatically:
+
+- 🔴 Updates/min > 20 → increase `minDistanceMeters` or `updateIntervalMs`
+- ⚠️ Updates/min 8–20 → consider reducing update frequency
+- 🔴 GPS on > 80% of time → enable `adaptiveAccuracy` or use `coarseTracking`
+- 🔴 Drain rate > 8%/hr → try `'balanced'` accuracy or longer update intervals
+- ✅ All metrics in range → confirms settings are efficient
+
+> **Note:** Battery drain is measured at the whole-device level since iOS and Android do not expose per-app battery consumption via public APIs. Use GPS active % and updates/min as the primary indicators of how much the package itself is contributing.
+
+### Manual usage (optional)
+
+If you prefer to control rendering yourself, `GeoDebugPanel` and `GeoDebugOverlay` are also exported for direct use — the `debug-panel` setup import is still required for them to render correctly.
+
+```tsx
+import { GeoDebugPanel, GeoDebugOverlay } from '@tsachit/react-native-geo-service';
+
+// Renders anywhere in your tree — self-hides when tracking is inactive:
+<GeoDebugOverlay />
+
+// Always-visible panel with custom poll interval:
+<GeoDebugPanel pollInterval={15000} />
+```
 
 ---
 
 ## Headless mode explained
 
 ### Android
-When the app is removed from recents (but not force-stopped), the foreground service keeps
-running. When a location update arrives and the React JS context is not active, the library
-calls `AppRegistry.startHeadlessTask` to spin up a lightweight JS runtime and invoke your
-registered `backgroundTaskName` handler.
+When the app is removed from recents, the foreground service keeps running. When a location arrives and the React JS context is inactive, the library calls `AppRegistry.startHeadlessTask` to spin up a lightweight JS runtime and invoke your registered handler.
+
+A `WatchdogWorker` (WorkManager, 15-min interval) monitors whether the service is still alive. On OEM devices with aggressive battery optimisation (Xiaomi, Samsung, Huawei), it restarts the service if it was killed unexpectedly.
+
+A `BootReceiver` restarts the service after device reboot if `restartOnBoot: true`.
 
 ### iOS
-When the app is terminated, iOS can relaunch it silently in the background if:
-1. You have the `location` background mode in `UIBackgroundModes`.
-2. You use `startMonitoringSignificantLocationChanges` (`coarseTracking: true`), **or**
-3. You have the _Always_ location permission and standard updates are running.
+When the app is terminated, iOS relaunches it silently when:
+1. `UIBackgroundModes` contains `location`, **and**
+2. `startMonitoringSignificantLocationChanges` is active (always on when tracking), **or**
+3. Standard location updates are running with the _Always_ permission
 
-Upon relaunch, `didFinishLaunchingWithOptions` is called with
-`UIApplicationLaunchOptionsLocationKey`, and the `CLLocationManager` delegate resumes delivering
-updates. The JS bridge boots and your `onLocation` listener fires normally.
+Upon relaunch, the module detects `UIApplicationLaunchOptionsLocationKey`, restores config from `NSUserDefaults`, and resumes tracking before the JS bridge has fully mounted. Any location events that arrive before JS listeners attach are buffered and flushed once `onLocation` is subscribed.
+
+---
+
+## Battery saving tips
+
+- Use `accuracy: 'balanced'` unless you need GPS precision — cell/WiFi positioning uses far less power
+- Increase `minDistanceMeters` to the minimum useful for your use case — fewer wakes = longer battery
+- Leave `adaptiveAccuracy: true` (default) — this is the single biggest saving; GPS turns off completely when parked
+- On iOS, use `coarseTracking: true` if ~500m granularity is acceptable — uses cell towers only
+- On Android, increase `updateIntervalMs` (e.g. `10000`) to give FusedLocationProvider room to batch fixes
+- Set `motionActivity: 'automotiveNavigation'` or `'fitness'` so iOS applies activity-specific optimisations
+- Use the `GeoDebugPanel` to measure real-world impact and act on its suggestions
 
 ---
 

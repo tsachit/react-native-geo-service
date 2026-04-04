@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.util.Log
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
@@ -34,6 +35,7 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
     private var config: GeoServiceConfig = GeoServiceConfig()
     private var listenerCount = 0
     private var locationReceiver: BroadcastReceiver? = null
+    private var batteryLevelAtStart: Int = 0
 
     init {
         isReactContextActive = true
@@ -108,6 +110,8 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
             startLocationService()
             saveTrackingState(true)
             scheduleWatchdog()
+            val bm = reactContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            batteryLevelAtStart = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
             log("Tracking started")
             promise.resolve(null)
         } catch (e: Exception) {
@@ -148,6 +152,45 @@ class GeoServiceModule(private val reactContext: ReactApplicationContext) :
             .addOnFailureListener { e ->
                 promise.reject("LOCATION_ERROR", e.message, e)
             }
+    }
+
+    @ReactMethod
+    fun getBatteryInfo(promise: Promise) {
+        try {
+            val bm = reactContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val status = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
+            val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                             status == BatteryManager.BATTERY_STATUS_FULL
+            val drain = if (batteryLevelAtStart > 0) maxOf((batteryLevelAtStart - level).toDouble(), 0.0) else 0.0
+
+            val elapsedMs = if (LocationService.trackingStartTimeMs > 0)
+                System.currentTimeMillis() - LocationService.trackingStartTimeMs else 0L
+            val elapsedSec = elapsedMs / 1000.0
+            val gpsActiveSec = LocationService.currentGpsActiveMs / 1000.0
+            val updatesPerMin = if (elapsedSec > 0) LocationService.updateCount / (elapsedSec / 60.0) else 0.0
+            val drainRatePerHour = if (elapsedSec > 0 && drain > 0) drain / (elapsedSec / 3600.0) else 0.0
+
+            promise.resolve(Arguments.createMap().apply {
+                putDouble("level", level.toDouble())
+                putBoolean("isCharging", isCharging)
+                putDouble("levelAtStart", batteryLevelAtStart.toDouble())
+                putDouble("drainSinceStart", drain)
+                putInt("updateCount", LocationService.updateCount.toInt())
+                putDouble("trackingElapsedSeconds", elapsedSec)
+                putDouble("gpsActiveSeconds", gpsActiveSec)
+                putDouble("updatesPerMinute", updatesPerMin)
+                putDouble("drainRatePerHour", maxOf(drainRatePerHour, 0.0))
+            })
+        } catch (e: Exception) {
+            promise.reject("BATTERY_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun setLocationIndicator(@Suppress("UNUSED_PARAMETER") show: Boolean, promise: Promise) {
+        // No-op on Android — the foreground notification already provides the status bar indicator
+        promise.resolve(null)
     }
 
     // --------------------------------------------------------------------------------------------
