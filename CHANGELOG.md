@@ -4,6 +4,31 @@ All notable changes to `@tsachit/react-native-geo-service` are documented here.
 
 ---
 
+## [1.0.4] — 2026-04-05
+
+### Added
+- `GeoSessionStore` — new JS module that persists debug panel metrics to `AsyncStorage` across app sessions. Detects session boundaries via `batteryLevelAtStart` so previous sessions are archived without double-counting when the Android foreground service keeps running after app reopen. Optional peer dependency on `@react-native-async-storage/async-storage` (silently skipped if not installed).
+- Debug panel now shows **cumulative totals** across all sessions: Geopoints, Tracking for, GPS active, Drained, and Drain rate are all accumulated rather than resetting on each app open.
+- **"Started"** metric in the debug panel — local date/time of the very first tracking session, persisted in `GeoSessionStore` and never overwritten until the user resets.
+- **"↺ Reset stats"** button at the bottom right of the debug panel — clears all accumulated data and the start timestamp so the user can re-measure from scratch.
+- `GeoSessionStore` exported from the package for apps that register their headless task via `AppRegistry` directly.
+- `AppState` listener in `GeoDebugPanel` — saves a snapshot to `GeoSessionStore` when the app goes to background, so stats survive unexpected kills.
+
+### Changed
+- `registerHeadlessTask()` now wraps the user's handler to automatically call `GeoSessionStore.onHeadlessLocation()` on each headless location event — Geopoints counter stays accurate while the app is killed with no extra code required in the host app.
+- Recommended headless task registration updated from `AppRegistry.registerHeadlessTask()` to `RNGSAppRegistry.registerHeadlessTask()` (package re-export) — the package alias `RNGSAppRegistry` makes the AppRegistry intent explicit.
+- **Geopoints now updates in real time** — `GeoDebugPanel` subscribes to `onLocation` internally and increments the counter immediately on every location event rather than waiting for the next poll. All other metrics (battery, drain rate, GPS active time) continue to refresh on the poll interval.
+- Debug panel initial position raised — pill starts higher above the tab bar (`PILL_INITIAL_BOTTOM_MARGIN = 120`) so it does not overlap navigation controls.
+- Panel expansion from pill now uses a safe estimated height fallback — expanded panel no longer clips below the screen edge on first open before `onLayout` has fired.
+- README: headless task setup updated to use `RNGSAppRegistry.registerHeadlessTask()`; GeoSessionStore section added; metrics table updated with Started row and cumulative descriptions; real-time Geopoints behaviour noted.
+
+### Fixed
+- Location permission re-initialisation on app return from Settings — if the user grants permission in iOS/Android Settings and returns to the app, tracking now starts automatically without requiring a full app restart.
+- Tracking now stops automatically when location permission is revoked from Settings — `GeoDebugOverlay` hides within 3 seconds.
+- `configure()` is always called on app open even if `isTracking()` returns `true` — this ensures `_debugMode` is set so `GeoDebugOverlay` can show the panel when the Android foreground service was already running from a previous session.
+
+---
+
 ## [1.0.3] — 2026-04-04
 
 ### Changed

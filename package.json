@@ -1,6 +1,6 @@
 {
   "name": "@tsachit/react-native-geo-service",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Battery-efficient background geolocation for React Native with headless support",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -25,7 +25,13 @@
   "author": "Sachit Karki",
   "license": "MIT",
   "peerDependencies": {
-    "react-native": ">=0.60.0"
+    "react-native": ">=0.60.0",
+    "@react-native-async-storage/async-storage": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@react-native-async-storage/async-storage": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/react": "^18.3.28",

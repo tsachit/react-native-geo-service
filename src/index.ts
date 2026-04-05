@@ -140,7 +140,12 @@ function registerHeadlessTask(
 ): void {
   if (Platform.OS !== 'android') return;
   const taskName = DEFAULT_CONFIG.backgroundTaskName!;
-  AppRegistry.registerHeadlessTask(taskName, () => handler);
+  AppRegistry.registerHeadlessTask(taskName, () => async (location: Location) => {
+    // Keep GeoSessionStore's updateCount in sync while the app is killed
+    const { GeoSessionStore } = require('./GeoSessionStore');
+    await GeoSessionStore.onHeadlessLocation();
+    await handler(location);
+  });
 }
 
 /**
@@ -175,3 +180,5 @@ const RNGeoService = {
 export default RNGeoService;
 export { GeoDebugPanel } from './GeoDebugPanel';
 export { GeoDebugOverlay } from './GeoDebugOverlay';
+export { GeoSessionStore } from './GeoSessionStore';
+export type { AccumulatedStats, StoreData } from './GeoSessionStore';

@@ -6,10 +6,13 @@ import {
   PanResponder,
   Animated,
   TouchableOpacity,
+  AppState,
   Dimensions,
 } from 'react-native';
 import RNGeoService from './index';
+import { GeoSessionStore } from './GeoSessionStore';
 import type { BatteryInfo } from './types';
+import type { AccumulatedStats, StoreData } from './GeoSessionStore';
 
 interface Props {
   /** Refresh interval in ms. Default: 30000 */
@@ -19,6 +22,10 @@ interface Props {
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const PANEL_WIDTH = Math.round(SCREEN_WIDTH * 0.95);
 const PILL_SIZE = 50;
+// Conservative estimate used when the panel hasn't rendered yet (onLayout not fired)
+const PANEL_ESTIMATED_HEIGHT = 440;
+const PANEL_BOTTOM_MARGIN = 20;
+const PILL_INITIAL_BOTTOM_MARGIN = 120;
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -134,19 +141,37 @@ function makePanResponder(
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+function formatStartedAt(ts: number | null): string {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   const [info, setInfo] = useState<BatteryInfo | null>(null);
   const [minimized, setMinimized] = useState(true);
+  const [storeData, setStoreData] = useState<StoreData>({
+    accumulated: { updateCount: 0, elapsedSeconds: 0, gpsActiveSeconds: 0, drain: 0 },
+    lastSnapshot: null,
+    trackingStartedAt: null,
+  });
+  // Live count updated on every location event so Geopoints doesn't wait for the poll
+  const [realtimeCount, setRealtimeCount] = useState(0);
 
-  const pan = useRef(new Animated.ValueXY({ x: 8, y: SCREEN_HEIGHT - 320 })).current;
-  const lastPos = useRef({ x: 8, y: SCREEN_HEIGHT - 320 });
+  const initialY = SCREEN_HEIGHT - PANEL_ESTIMATED_HEIGHT - PILL_INITIAL_BOTTOM_MARGIN;
+  const pan = useRef(new Animated.ValueXY({ x: 8, y: initialY })).current;
+  const lastPos = useRef({ x: 8, y: initialY });
   const panelHeight = useRef(0);
 
   const pillPanResponder = useRef(
     makePanResponder(pan, lastPos, PILL_SIZE, PILL_SIZE, () => {
+      const expandedHeight = panelHeight.current > 0 ? panelHeight.current : PANEL_ESTIMATED_HEIGHT;
       const clamped = {
         x: Math.min(lastPos.current.x, SCREEN_WIDTH - PANEL_WIDTH),
-        y: Math.min(lastPos.current.y, SCREEN_HEIGHT - panelHeight.current),
+        y: Math.min(lastPos.current.y, SCREEN_HEIGHT - expandedHeight - PANEL_BOTTOM_MARGIN),
       };
       lastPos.current = clamped;
       pan.setValue(clamped);
@@ -177,13 +202,44 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
     try {
       const data = await RNGeoService.getBatteryInfo();
       setInfo(data);
+      // Persist snapshot and reload accumulated so totals stay up to date
+      await GeoSessionStore.saveSnapshot(data);
+      const store = await GeoSessionStore.load();
+      setStoreData(store);
     } catch (_) {}
   }, []);
 
+  const handleReset = useCallback(async () => {
+    await GeoSessionStore.clear();
+    setStoreData({ accumulated: { updateCount: 0, elapsedSeconds: 0, gpsActiveSeconds: 0, drain: 0 }, lastSnapshot: null, trackingStartedAt: null });
+    setRealtimeCount(0);
+  }, []);
+
   useEffect(() => {
+    // Load accumulated history on mount
+    GeoSessionStore.load().then(setStoreData).catch(() => {});
     refresh();
     const id = setInterval(refresh, pollInterval);
-    return () => clearInterval(id);
+
+    // Real-time Geopoints counter — increments on every location event without waiting for the poll
+    const locationSub = RNGeoService.onLocation(() => {
+      setRealtimeCount(c => c + 1);
+    });
+
+    // Save snapshot when app is sent to background so stats survive unexpected kills
+    const appStateSub = AppState.addEventListener('change', status => {
+      if (status === 'background' || status === 'inactive') {
+        RNGeoService.getBatteryInfo()
+          .then(GeoSessionStore.saveSnapshot)
+          .catch(() => {});
+      }
+    });
+
+    return () => {
+      clearInterval(id);
+      locationSub.remove();
+      appStateSub.remove();
+    };
   }, [refresh, pollInterval]);
 
   // ── Minimized pill ──
@@ -199,13 +255,23 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   }
 
   // Safely normalise — native side returns undefined for new fields until rebuilt
-  const elapsed   = info?.trackingElapsedSeconds ?? 0;
-  const updates   = info?.updateCount            ?? 0;
-  const upm       = info?.updatesPerMinute       ?? 0;
-  const gpsActive = info?.gpsActiveSeconds       ?? 0;
-  const level     = info?.level                  ?? -1;
-  const drain     = info?.drainSinceStart        ?? 0;
-  const drainRate = info?.drainRatePerHour       ?? 0;
+  const sessionElapsed   = info?.trackingElapsedSeconds ?? 0;
+  const sessionGpsActive = info?.gpsActiveSeconds       ?? 0;
+  const sessionDrain     = info?.drainSinceStart        ?? 0;
+  const level            = info?.level                  ?? -1;
+
+  // Use the higher of the native poll count vs the live subscription count
+  // so we never show a number lower than what the native side knows about
+  const sessionUpdates = Math.max(info?.updateCount ?? 0, realtimeCount);
+
+  // Combine current session with accumulated history from previous sessions
+  const acc: AccumulatedStats = storeData.accumulated;
+  const elapsed   = acc.elapsedSeconds   + sessionElapsed;
+  const updates   = acc.updateCount      + sessionUpdates;
+  const gpsActive = acc.gpsActiveSeconds + sessionGpsActive;
+  const drain     = acc.drain            + sessionDrain;
+  const upm       = elapsed > 0 ? updates / (elapsed / 60)   : 0;
+  const drainRate = elapsed > 0 ? drain   / (elapsed / 3600) : 0;
 
   const safeInfo = info
     ? { ...info, trackingElapsedSeconds: elapsed, updateCount: updates,
@@ -214,6 +280,7 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
     : null;
 
   const suggestions = safeInfo ? getSuggestions(safeInfo) : [];
+  const startedAt = formatStartedAt(storeData.trackingStartedAt);
 
   // ── Expanded panel ──
   return (
@@ -239,9 +306,13 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
             {/* ── Metrics grid ── */}
             <View style={styles.grid}>
               <MetricBox
+                label="Started"
+                value={startedAt}
+                desc="first session began" />
+              <MetricBox
                 label="Tracking for"
                 value={elapsed > 0 ? formatElapsed(elapsed) : '—'}
-                desc="session duration" />
+                desc="cumulative duration" />
               <MetricBox
                 label="Geopoints"
                 value={`${updates}`}
@@ -281,6 +352,13 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
         ) : (
           <Text style={styles.label}>Waiting for data…</Text>
         )}
+
+        {/* ── Reset button ── */}
+        <View style={styles.resetRow}>
+          <TouchableOpacity onPress={handleReset} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.resetBtn}>↺ Reset stats</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </Animated.View>
   );
@@ -337,7 +415,7 @@ const styles = StyleSheet.create({
     minWidth: '30%', flex: 1,
     alignItems: 'center',
   },
-  metricValue: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
+  metricValue: { color: '#fff', fontWeight: 'bold', fontSize: 15, textAlign: 'center' },
   metricLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 9, marginTop: 2, textAlign: 'center' },
   metricSub: { color: 'rgba(255,255,255,0.3)', fontSize: 8, textAlign: 'center' },
   // Suggestions
@@ -346,6 +424,9 @@ const styles = StyleSheet.create({
   suggestion: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 5, gap: 6 },
   suggestionEmoji: { fontSize: 12, lineHeight: 16 },
   suggestionText: { fontSize: 11, lineHeight: 16, flex: 1 },
+  // Reset
+  resetRow: { alignItems: 'flex-end', marginTop: 10 },
+  resetBtn: { color: 'rgba(255,255,255,0.45)', fontSize: 13, paddingVertical: 6, paddingHorizontal: 10 },
   // Minimized pill
   pill: {
     position: 'absolute',

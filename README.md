@@ -83,13 +83,17 @@ In your app's **`index.js`** (top level, outside any component):
 
 ```js
 import { AppRegistry } from 'react-native';
+import RNGSAppRegistry from '@tsachit/react-native-geo-service';
 import App from './App';
 
 AppRegistry.registerComponent('YourApp', () => App);
 
 // Handles location events when the React context is not active.
 // Runs even when the app is killed (foreground service must be running).
-AppRegistry.registerHeadlessTask('GeoServiceHeadlessTask', () => async (location) => {
+// Using RNGSAppRegistry.registerHeadlessTask() is preferred over
+// AppRegistry.registerHeadlessTask() directly — it automatically keeps
+// the debug panel's session store in sync while the app is killed.
+RNGSAppRegistry.registerHeadlessTask(async (location) => {
   console.log('[Background] Location:', location);
   // Send to your server using a pre-stored auth token (e.g. SecureStore/Keychain).
   // Do not rely on in-memory state — this JS context is isolated.
@@ -188,10 +192,12 @@ const tracking = await RNGeoService.isTracking();
 
 ### Register headless task via the module
 
-Alternatively to `AppRegistry.registerHeadlessTask`, you can use the helper:
+Use `registerHeadlessTask()` from the package instead of `AppRegistry.registerHeadlessTask()` directly — it wraps your handler to automatically keep the debug panel's session metrics in sync while the app is killed:
 
 ```ts
-RNGeoService.registerHeadlessTask(async (location) => {
+import RNGSAppRegistry from '@tsachit/react-native-geo-service';
+
+RNGSAppRegistry.registerHeadlessTask(async (location) => {
   await sendToServer(location);
 });
 ```
@@ -246,7 +252,7 @@ Subscribe to location updates. Call `.remove()` on the returned subscription to 
 Subscribe to location errors (e.g. permission revoked mid-session).
 
 ### `registerHeadlessTask(handler)` *(Android only)*
-Register a function to handle location events when the app is not in the foreground.
+Register a function to handle location events when the app is not in the foreground. Preferred over `AppRegistry.registerHeadlessTask()` directly — automatically keeps `GeoSessionStore` in sync so the debug panel shows accurate Geopoints counts while the app is killed.
 
 ### `getBatteryInfo(): Promise<BatteryInfo>`
 Returns battery and session tracking metrics. See [Debug mode](#debug-mode) below.
@@ -352,17 +358,19 @@ The panel is a **draggable, minimizable floating overlay** that starts minimized
 - **Tap the 📍 circle** to expand
 - **Drag** by holding the striped header bar
 - **Minimize** with the ⊖ button — collapses back to the 📍 circle
+- **Geopoints updates in real time** on every location event — no need to wait for the poll interval
 
-**Metrics shown:**
+**Metrics shown** (all values are cumulative across app restarts — see [GeoSessionStore](#geosessionstore)):
 
 | Metric | Description |
 |--------|-------------|
-| Tracking for | How long the current session has been running |
-| Geopoints | Total locations received |
+| Started | Local date/time the very first tracking session began |
+| Tracking for | Cumulative duration across all sessions |
+| Geopoints | Total locations received across all sessions |
 | Updates/min | Average frequency of location updates |
-| GPS active | % of session time the GPS chip was on vs idle |
+| GPS active | % of total time the GPS chip was on vs idle |
 | Battery now | Current device battery level |
-| Drained | Total device battery % dropped since `start()` |
+| Drained | Total device battery % dropped since first `start()` |
 | Drain rate | Battery consumed per hour (total device, not just location) |
 
 **Smart suggestions** are shown automatically:
@@ -383,6 +391,27 @@ For a custom poll interval or always-visible panel, use `GeoDebugPanel` directly
 import { GeoDebugPanel } from '@tsachit/react-native-geo-service';
 
 <GeoDebugPanel pollInterval={15000} />
+```
+
+### GeoSessionStore
+
+All debug panel metrics are stored in-memory on the native side and would normally reset every time tracking restarts (app killed, OS killed the service, device rebooted). `GeoSessionStore` persists snapshots to `AsyncStorage` so the panel shows **cumulative totals** across sessions.
+
+Requires [`@react-native-async-storage/async-storage`](https://github.com/react-native-async-storage/async-storage) to be installed in your app (optional peer dependency — the panel silently skips persistence if it is not present).
+
+**Session boundaries** are detected automatically: when `batteryLevelAtStart` changes between snapshots, the previous session is archived before the new one begins. This prevents double-counting when the Android foreground service keeps running after the app is reopened.
+
+The **"↺ Reset stats"** button inside the panel clears all accumulated data and the recorded start time so you can re-measure from scratch.
+
+If you use `RNGSAppRegistry.registerHeadlessTask()`, `GeoSessionStore` is updated automatically on each headless location event — no extra code required. If you register via `AppRegistry.registerHeadlessTask()` directly, you can increment the counter manually:
+
+```ts
+import { GeoSessionStore } from '@tsachit/react-native-geo-service';
+
+AppRegistry.registerHeadlessTask('GeoServiceHeadlessTask', () => async (location) => {
+  await sendToServer(location);
+  await GeoSessionStore.onHeadlessLocation();
+});
 ```
 
 ---
