@@ -160,8 +160,11 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   });
   // Live count updated on every location event so Geopoints doesn't wait for the poll
   const [realtimeCount, setRealtimeCount] = useState(0);
-  // Native updateCount value at the last reset — subtracted so the display starts from 0
-  const countBaseline = useRef(0);
+  // Native values captured at reset time — subtracted so all metrics restart from 0
+  const countBaseline   = useRef(0);
+  const elapsedBaseline = useRef(0);
+  const drainBaseline   = useRef(0);
+  const gpsBaseline     = useRef(0);
 
   const initialY = SCREEN_HEIGHT - PANEL_ESTIMATED_HEIGHT - PILL_INITIAL_BOTTOM_MARGIN;
   const pan = useRef(new Animated.ValueXY({ x: 8, y: initialY })).current;
@@ -214,8 +217,11 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   const handleReset = useCallback(async () => {
     await GeoSessionStore.clear();
     setStoreData({ accumulated: { updateCount: 0, elapsedSeconds: 0, gpsActiveSeconds: 0, drain: 0 }, lastSnapshot: null, trackingStartedAt: null });
-    // Capture current native count as baseline so post-reset display starts from 0
-    countBaseline.current = info?.updateCount ?? 0;
+    // Capture all current native values as baselines so every metric restarts from 0
+    countBaseline.current   = info?.updateCount             ?? 0;
+    elapsedBaseline.current = info?.trackingElapsedSeconds  ?? 0;
+    drainBaseline.current   = info?.drainSinceStart         ?? 0;
+    gpsBaseline.current     = info?.gpsActiveSeconds        ?? 0;
     setRealtimeCount(0);
   }, [info]);
 
@@ -258,13 +264,13 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
     );
   }
 
-  // Safely normalise — native side returns undefined for new fields until rebuilt
-  const sessionElapsed   = info?.trackingElapsedSeconds ?? 0;
-  const sessionGpsActive = info?.gpsActiveSeconds       ?? 0;
-  const sessionDrain     = info?.drainSinceStart        ?? 0;
-  const level            = info?.level                  ?? -1;
+  // Safely normalise — native side returns undefined for new fields until rebuilt.
+  // Subtract baselines so every metric restarts from 0 after a reset.
+  const sessionElapsed   = Math.max(0, (info?.trackingElapsedSeconds ?? 0) - elapsedBaseline.current);
+  const sessionGpsActive = Math.max(0, (info?.gpsActiveSeconds       ?? 0) - gpsBaseline.current);
+  const sessionDrain     = Math.max(0, (info?.drainSinceStart        ?? 0) - drainBaseline.current);
+  const level            = info?.level ?? -1;
 
-  // Subtract baseline so the count restarts from 0 after a reset.
   // Use the higher of the adjusted native count vs the live subscription count
   // so we never show a number lower than what the native side knows about.
   const nativeCountSinceReset = Math.max(0, (info?.updateCount ?? 0) - countBaseline.current);
