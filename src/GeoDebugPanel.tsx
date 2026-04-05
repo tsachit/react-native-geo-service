@@ -160,6 +160,8 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   });
   // Live count updated on every location event so Geopoints doesn't wait for the poll
   const [realtimeCount, setRealtimeCount] = useState(0);
+  // Native updateCount value at the last reset — subtracted so the display starts from 0
+  const countBaseline = useRef(0);
 
   const initialY = SCREEN_HEIGHT - PANEL_ESTIMATED_HEIGHT - PILL_INITIAL_BOTTOM_MARGIN;
   const pan = useRef(new Animated.ValueXY({ x: 8, y: initialY })).current;
@@ -212,8 +214,10 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   const handleReset = useCallback(async () => {
     await GeoSessionStore.clear();
     setStoreData({ accumulated: { updateCount: 0, elapsedSeconds: 0, gpsActiveSeconds: 0, drain: 0 }, lastSnapshot: null, trackingStartedAt: null });
+    // Capture current native count as baseline so post-reset display starts from 0
+    countBaseline.current = info?.updateCount ?? 0;
     setRealtimeCount(0);
-  }, []);
+  }, [info]);
 
   useEffect(() => {
     // Load accumulated history on mount
@@ -260,9 +264,11 @@ export const GeoDebugPanel: React.FC<Props> = ({ pollInterval = 30_000 }) => {
   const sessionDrain     = info?.drainSinceStart        ?? 0;
   const level            = info?.level                  ?? -1;
 
-  // Use the higher of the native poll count vs the live subscription count
-  // so we never show a number lower than what the native side knows about
-  const sessionUpdates = Math.max(info?.updateCount ?? 0, realtimeCount);
+  // Subtract baseline so the count restarts from 0 after a reset.
+  // Use the higher of the adjusted native count vs the live subscription count
+  // so we never show a number lower than what the native side knows about.
+  const nativeCountSinceReset = Math.max(0, (info?.updateCount ?? 0) - countBaseline.current);
+  const sessionUpdates = Math.max(nativeCountSinceReset, realtimeCount);
 
   // Combine current session with accumulated history from previous sessions
   const acc: AccumulatedStats = storeData.accumulated;
