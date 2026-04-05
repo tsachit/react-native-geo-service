@@ -349,7 +349,8 @@ await RNGeoService.stop();  // panel hides automatically
 
 | Minimized | Opened |
 |--------|-------------|
-| <img width="349" height="261" alt="image" src="https://github.com/user-attachments/assets/a6b43b93-7a93-485d-a68d-f4e4fe658011" /> | <img width="363" height="348" alt="image" src="https://github.com/user-attachments/assets/9c02ebc9-28f2-4983-982b-810c98a32dfe" /> |
+| <img width="349" height="261" alt="image" src="https://github.com/user-attachments/assets/a6b43b93-7a93-485d-a68d-f4e4fe658011" /> | <img width="321" height="325" alt="image" src="https://github.com/user-attachments/assets/8715d657-0984-46c3-bf38-d782968ddc99" /> |
+
 
 ### Debug panel behaviour
 
@@ -359,6 +360,7 @@ The panel is a **draggable, minimizable floating overlay** that starts minimized
 - **Drag** by holding the striped header bar
 - **Minimize** with the ⊖ button — collapses back to the 📍 circle
 - **Geopoints updates in real time** on every location event — no need to wait for the poll interval
+- **"↺ Reset stats"** at the bottom right clears all accumulated data; Geopoints, elapsed time, battery drain, and the start timestamp all reset to zero
 
 **Metrics shown** (all values are cumulative across app restarts — see [GeoSessionStore](#geosessionstore)):
 
