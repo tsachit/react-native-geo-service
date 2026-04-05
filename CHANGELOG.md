@@ -4,6 +4,13 @@ All notable changes to `@tsachit/react-native-geo-service` are documented here.
 
 ---
 
+## [1.0.5] — 2026-04-05
+
+### Fixed
+- **"↺ Reset stats" now correctly resets Geopoints to zero** — previously the native `updateCount` from the last poll would persist through `Math.max()` and immediately override the reset. Fixed by recording a `countBaseline` at reset time and subtracting it from the native count, so both the live counter and the polled count start from 0 after a reset.
+
+---
+
 ## [1.0.4] — 2026-04-05
 
 ### Added
